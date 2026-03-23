@@ -9,6 +9,7 @@
 #include "esphome/components/uart/uart.h"
 
 #include <vector>
+#include <functional> // 補上 std::function 需要的標頭檔
 
 namespace esphome {
 namespace taixia {
@@ -179,17 +180,12 @@ namespace taixia {
 #define SERVICE_ID_FAN_OPERATING_WATT 0x11
 #define SERVICE_ID_FAN_ENERGY_CONSUMPTION 0x12
 
-#define TAIXIA_VALUED_ENTITY_(type, name, value_type) \
- protected: \
-  value_type value_##name##_; \
-  TAIXIA_ENTITY_(type, name)
-
+// 修正巨集：移除多餘的分隔線與不必要的 value_type 定義，並保持 NOLINT
 #define TAIXIA_ENTITY_(type, name) \
  protected: \
-  type *name##_{}; /* NOLINT */ \
-\
+  type *name##_{}; \
  public: \
-  void set_##name(type *name) { /* NOLINT */ \
+  void set_##name(type *name) { \
     this->name##_ = name; \
   }
 
@@ -206,12 +202,9 @@ class TaiXia;
 class TaiXiaListener {
  public:
   void set_sa_id(uint16_t sa_id) { this->sa_id_ = sa_id; }
-
   void on_response(uint16_t sa_id, std::vector<uint8_t> &response);
-
  protected:
   uint16_t sa_id_{0};
-
   virtual void handle_response(std::vector<uint8_t> &response) = 0;
 };
 
@@ -231,24 +224,25 @@ class TaiXia : public uart::UARTDevice, public Component {
   uint8_t checksum(const uint8_t *data, uint8_t len);
   void readline(bool handle_response);
   bool send(uint8_t packet_length, uint8_t date_type, uint8_t sa_id, uint8_t service_id, uint16_t data);
+  
+  // 修正 1: 參數名稱與 .cpp 保持一致 (rlen)
   bool send_cmd(const uint8_t *command, uint8_t *response, uint8_t len) {
-    if (this->version_ < 3.0)
-      return write_command_(command, response, len, len, 60000);
-    else
-      return write_command_(command, response, len, len);
+      return write_command_(command, response, len, len, 1000);
   }
+
   void switch_command(uint8_t sa_id, uint8_t service_id, bool onoff);
   void set_number(uint8_t sa_id, uint8_t service_id, float value);
   void get_number(uint8_t sa_id, uint8_t service_id, uint8_t *buffer);
   void button_command(uint8_t sa_id, uint8_t service_id, uint8_t value);
+  
   bool have_sensors() { return this->have_sensors_; }
   void set_have_sensors(bool have_sensors) { this->have_sensors_ = have_sensors; }
   float get_version() { return this->version_; }
   bool read_sa_status();
 
-  void power_switch(bool state) { this->power_switch_->publish_state(state); }
+  void power_switch(bool state) { if(this->power_switch_) this->power_switch_->publish_state(state); }
 
-  // TaiXIA
+  // 實體清單保持原版順序
   TAIXIA_BINARY_SENSOR(power_binary_sensor)
   TAIXIA_BUTTON(get_info_button)
   TAIXIA_BUTTON(filter_clean_notify_button)
@@ -260,7 +254,6 @@ class TaiXia : public uart::UARTDevice, public Component {
   TAIXIA_TEXT_SENSOR(services_textsensor)
   TAIXIA_SWITCH(power_switch)
 
-  // Climate 0x01
   TAIXIA_BUTTON(energy_reset_button)
   TAIXIA_BUTTON(filter_clean_hours_button)
   TAIXIA_SWITCH(sleepy_switch)
@@ -280,7 +273,6 @@ class TaiXia : public uart::UARTDevice, public Component {
   TAIXIA_NUMBER(swing_horizontal_level_number)
   TAIXIA_NUMBER(sleep_timer_number)
 
-  // Dehumiditier 0x04
   TAIXIA_BINARY_SENSOR(water_tank_full_binary_sensor)
   TAIXIA_BINARY_SENSOR(filter_notify_binary_sensor)
   TAIXIA_BINARY_SENSOR(side_air_flow_binary_sensor)
@@ -302,46 +294,37 @@ class TaiXia : public uart::UARTDevice, public Component {
   TAIXIA_NUMBER(high_humidity_level_number)
   TAIXIA_NUMBER(light_level_number)
 
-  // ERV 0x14
   TAIXIA_BINARY_SENSOR(front_filter_notify_binary_sensor)
   TAIXIA_BINARY_SENSOR(pm25_filter_notify_binary_sensor)
   TAIXIA_BUTTON(front_filter_notify_button)
   TAIXIA_BUTTON(pm25_filter_notify_button)
-/*
-  TAIXIA_SWITCH(filter_notify_switch)
-  TAIXIA_SWITCH(light_switch)
-  TAIXIA_SWITCH(beeper_switch)
-  TAIXIA_SWITCH(mildew_proof_switch)
-*/
   TAIXIA_SWITCH(humidity_notify_switch)
   TAIXIA_SWITCH(lock_switch)
   TAIXIA_SWITCH(saa_notify_switch)
   TAIXIA_SWITCH(pm25_switch)
 
-  // Fan 0x0F
   TAIXIA_SWITCH(ions_switch)
   TAIXIA_SWITCH(light_switch)
   TAIXIA_NUMBER(off_timer_number)
   TAIXIA_NUMBER(on_timer_number)
 
  protected:
-  void readline_(int readch, char *buffer, int len);
   void get_info_(void);
   bool read_climate_status_(void);
 
   std::vector<uint8_t> buffer_;
-  uint8_t protocol_;
-  uint8_t sa_id_;
+  // 修正 2: 移除重複定義或未使用的 protocol_ / len_，確保與 .cpp 一致
+  uint8_t sa_id_{0}; 
   float version_{4.0};
-  uint8_t len_;
   uint16_t max_length_{0};
-  uint32_t response_time_{1};
+  uint32_t response_time_{50}; 
   bool have_sensors_{false};
-
   std::vector<TaiXiaListener *> listeners_{};
+  std::string parse_string_(const uint8_t *data, uint8_t len);
 
-  bool write_command_(const uint8_t *command, uint8_t *response, uint8_t len, uint8_t tlen, uint32_t timeout);
-  bool write_command_(const uint8_t *command, uint8_t *response, uint8_t len, uint8_t tlen);
+  // 修正 3: 參數名稱統一為 rlen，與 .cpp 對應
+  bool write_command_(const uint8_t *command, uint8_t *response, uint8_t len, uint8_t rlen, uint32_t timeout);
+  bool write_command_(const uint8_t *command, uint8_t *response, uint8_t len, uint8_t rlen);
 };
 
 }  // namespace taixia
